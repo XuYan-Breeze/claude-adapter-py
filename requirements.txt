@@ -1,0 +1,11 @@
+# Core dependencies 核心依赖
+fastapi>=0.115.0
+uvicorn[standard]>=0.30.0
+openai>=1.50.0
+pydantic>=2.9.0
+typer[all]>=0.12.0
+questionary>=2.0.1
+rich>=13.7.0
+httpx>=0.27.0
+python-dotenv>=1.0.1
+packaging>=24.0

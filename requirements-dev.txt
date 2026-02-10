@@ -1,0 +1,15 @@
+# Development dependencies 开发依赖
+-r requirements.txt
+
+# Testing 测试
+pytest>=8.0.0
+pytest-asyncio>=0.23.0
+pytest-cov>=4.1.0
+
+# Code quality 代码质量
+black>=24.0.0
+ruff>=0.6.0
+mypy>=1.11.0
+
+# Type stubs 类型存根
+types-requests>=2.31.0
