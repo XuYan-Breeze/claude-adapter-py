@@ -59,7 +59,7 @@ PROVIDER_GUIDANCE: dict[ProviderName, list[str]] = {
         "      $ lms server start",
         "",
         "   LM Studio 仅支持本地模型，需先用 lms get 下载",
-        "   建议在 LM Studio GUI 中将 Context Length 设置为 16384+",
+        "   若模型实际上下文为 4096，配置时请将「上下文窗口」设为 4096，避免 n_keep>=n_ctx 错误",
     ],
     "kimi": [
         "Kimi (月之暗面) 使用步骤:",
@@ -139,7 +139,7 @@ PROVIDER_PRESETS: dict[ProviderName, ProviderPreset] = {
         ),
         default_tool_format="native",
         description="LM Studio localhost:1234 (https://lmstudio.ai/)",
-        max_context_window=16384,
+        max_context_window=131072,
     ),
     "kimi": ProviderPreset(
         name="kimi",

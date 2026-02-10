@@ -5,6 +5,7 @@
 
 [English](#overview) | [中文](README_CN.md)
 
+![UI.png](./image/ui.png)
 ---
 
 ## Overview
@@ -54,43 +55,58 @@ claude-adapter-py
 
 ### 2. Select provider type
 
-The CLI will show three categories:
+The CLI starts with provider selection. You will see three categories plus navigation:
 
 ```
-? Choose provider type:
-  🆓 Free    NVIDIA, Ollama, LM Studio
-  💰 Paid    Kimi, DeepSeek, GLM, MiniMax
-  🔧 Custom  OpenAI-compatible endpoint
+? Choose provider type 选择提供商类型:
+  Free    NVIDIA, Ollama, LM Studio
+  Paid    Kimi, DeepSeek, GLM, MiniMax
+  Custom  OpenAI-compatible endpoint
+  Go back  返回重新选择
+  Exit  退出
 ```
+
+![Select.png](./image/Select.png)
 
 ### 3. Select specific provider
 
-After choosing a category, pick the provider:
+After choosing a category, pick the provider (each menu also has **Go back** and **Exit**):
 
 ```
-? Choose provider:
+? Choose provider 选择提供商:
   NVIDIA NIM              NVIDIA NIM API (https://build.nvidia.com/)
   Ollama                  Ollama localhost:11434 (https://ollama.com/)
   LM Studio               LM Studio localhost:1234 (https://lmstudio.ai/)
+  Go back  返回重新选择
+  Exit  退出
 ```
+
+![provider.png](./image/provider.png)
 
 ### 4. Use saved config or configure
 
 **If a saved config exists** for the selected provider:
 
 ```
-? NVIDIA NIM found, choose action:
-  ▶  Use saved config  使用已存储的 NVIDIA NIM 配置启动
-  🔧 Reconfigure  重新配置 NVIDIA NIM 参数
+? NVIDIA NIM found, choose action 已有配置，选择操作:
+  Use saved config  使用已存储的 NVIDIA NIM 配置启动
+  Reconfigure  重新配置 NVIDIA NIM 参数
+  Go back  返回重新选择
+  Exit  退出
 ```
+
+![config.png](./image/config.png)
 
 **If no saved config exists**:
 
 ```
-? No config for Ollama, choose action:
-  🔧 Configure  配置 Ollama 参数
-  ↩  Go back  返回重新选择
+? No config for Ollama, choose action 无已存储配置，选择操作:
+  Configure  配置 Ollama 参数
+  Go back  返回重新选择
+  Exit  退出
 ```
+
+Every step (including setup guidance and tool-format selection) offers **Go back** to return to the previous choice and **Exit** to quit.
 
 ### 5. The adapter will
 
@@ -120,19 +136,22 @@ export ANTHROPIC_BASE_URL="http://localhost:3080"
 3. Choose a model, recommended: `minimaxai/minimax-m2.1`
 4. Configure and start
 
+![NVIDIA.png](./image/NVIDIA.png)
+![claudecode-nvidia.png](./image/claudecode-nvidia.png)
+
 ### Ollama  Free, Local + Cloud
 
 Ollama supports both **local models** and **cloud models**.
 
 ```bash
 # 1. Install Ollama
-#    Visit https://ollama.com/download
+#    curl -fsSL https://ollama.com/install.sh | sh
 
 # 2. Start the service
 ollama serve
 
 # 3. Pull a local model
-ollama pull qwen2.5-coder:32b
+ollama pull gpt-oss:20b
 
 # 3b. Or pull a cloud model
 ollama pull kimi-k2.5:cloud
@@ -142,6 +161,13 @@ ollama list
 ```
 
 > Make sure `ollama serve` is running before starting the adapter.
+
+![ollama_list.png](./image/ollama_list.png)
+![ollama_serve.png](./image/ollama_serve.png)
+![ollama.png](./image/ollama.png)
+![ollama_config.png](./image/ollama_config.png)
+![claudecode_ollama.png](./image/claudecode_ollama.png)
+![ollama_cloud.png](./image/ollama_cloud.png)
 
 ### LM Studio  Free, Local only
 
@@ -162,6 +188,11 @@ lms server start
 
 > The server runs on port 1234 by default. Increase Context Length to 16384+ in LM Studio settings.
 
+![lms_model.png](./image/lms_model.png)
+![lms_config.png](./image/lms_config.png)
+![lms.png](./image/lms.png)
+![claudecode_lms.png](./image/claudecode_lms.png)
+
 ### Kimi  Paid, Cloud
 
 1. Visit https://platform.moonshot.cn/console/api-keys
@@ -174,7 +205,7 @@ lms server start
 2. Sign up and create an API Key, format: `sk-xxxx`
 3. Recommended model: `deepseek-chat`
 
-### GLM Z.ai  Paid, Cloud
+### Z.ai  Paid, Cloud
 
 1. Visit https://bigmodel.cn/usercenter/proj-mgmt/apikeys
 2. Sign up and create an API Key, format: `xxxx.xxxx`
@@ -198,7 +229,7 @@ lms server start
 ## CLI Commands
 
 ```bash
-# Start server, interactive provider selection
+# Start server (interactive: select provider, then use config / reconfigure / configure)
 claude-adapter-py
 
 # Force reconfigure current provider
@@ -213,12 +244,14 @@ claude-adapter-py --no-claude-settings
 # List saved providers
 claude-adapter-py ls
 
-# Remove a provider config
+# Remove a provider config (prompt includes Go back / Exit)
 claude-adapter-py rm <provider-name>
 
 # Show help
 claude-adapter-py -h
 ```
+
+In every interactive menu you can choose **Go back** to return to the previous step or **Exit** to quit.
 
 ## Configuration
 
@@ -289,6 +322,11 @@ Injects XML tool instructions into the system prompt. Models output `<tool_code>
 The adapter auto-finds the next available port, or specify one:
 
 ```bash
+# Check and kill the process using the port
+lsof -i :3080
+kill -9 <id>
+
+# Or change the port
 claude-adapter-py -p 8080
 ```
 
@@ -308,16 +346,6 @@ claude-adapter-py -r
 **Ollama**: run `ollama list` and `ollama pull <model>`
 
 **LM Studio**: make sure the model is loaded with `lms load <model>` and server is running with `lms server start`
-
-## Development
-
-```bash
-pip install -e ".[dev]"
-pytest
-black src/ tests/
-ruff check src/ tests/
-mypy src/
-```
 
 ## Project Structure
 

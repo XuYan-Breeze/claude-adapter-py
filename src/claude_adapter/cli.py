@@ -18,7 +18,7 @@ Execution flow 执行流程:
 
 import asyncio
 import sys
-from typing import Optional
+from typing import Optional, Union
 
 import questionary
 import typer
@@ -56,17 +56,18 @@ app = typer.Typer(
 )
 
 
-# ═══════════════════════════════════════════════════════════
-#  Select provider  选择提供商
-# ═══════════════════════════════════════════════════════════
+# Sentinel: go back to previous step 返回上一步
+BACK = "back"
+EXIT = "exit"
 
-def _select_provider() -> Optional[ProviderName]:
+
+def _select_provider() -> Union[Optional[ProviderName], str]:
     """Interactive provider selection with category grouping
     交互式提供商选择，带分类分组
 
     Returns:
-        Selected provider name, or None if cancelled
-        选择的提供商名称，取消则为 None
+        Provider name, or BACK to re-select category, or None to exit
+        提供商名称，或 BACK 返回重选分类，或 None 退出
     """
     ui.header("Select Provider 选择提供商")
 
@@ -84,6 +85,8 @@ def _select_provider() -> Optional[ProviderName]:
             f"{CATEGORY_LABELS['custom']} OpenAI-compatible endpoint",
             value="custom",
         ),
+        questionary.Choice("Go back  返回重新选择", value=BACK),
+        questionary.Choice("Exit  退出", value=EXIT),
     ]
 
     category = questionary.select(
@@ -91,15 +94,13 @@ def _select_provider() -> Optional[ProviderName]:
         choices=category_choices,
     ).ask()
 
-    if not category:
+    if not category or category == EXIT or category == BACK:
         return None
 
     # ── Provider selection within category 分类内选择提供商 ──
     providers = get_providers_by_category(category)
 
     if len(providers) == 1:
-        # Only one in this category, auto-select
-        # 该分类仅一个提供商，自动选择
         return providers[0].name
 
     provider_choices = [
@@ -109,12 +110,18 @@ def _select_provider() -> Optional[ProviderName]:
         )
         for p in providers
     ]
+    provider_choices.append(questionary.Choice("Go back  返回重新选择", value=BACK))
+    provider_choices.append(questionary.Choice("Exit  退出", value=EXIT))
 
     selected = questionary.select(
         "Choose provider 选择提供商:",
         choices=provider_choices,
     ).ask()
 
+    if not selected or selected == EXIT:
+        return None
+    if selected == BACK:
+        return BACK
     return selected  # type: ignore
 
 
@@ -127,17 +134,19 @@ def _action_has_config(preset: ProviderPreset) -> Optional[str]:
     已存储配置时选择操作
 
     Returns:
-        "use" | "reconfigure" | None
+        "use" | "reconfigure" | "back" | "exit" | None
     """
     choices = [
         questionary.Choice(
-            f"▶  Use saved config  使用已存储的 {preset.label} 配置启动",
+            f"Use saved config  使用已存储的 {preset.label} 配置启动",
             value="use",
         ),
         questionary.Choice(
-            f"🔧 Reconfigure  重新配置 {preset.label} 参数",
+            f"Reconfigure  重新配置 {preset.label} 参数",
             value="reconfigure",
         ),
+        questionary.Choice("Go back  返回重新选择", value=BACK),
+        questionary.Choice("Exit  退出", value=EXIT),
     ]
 
     return questionary.select(
@@ -151,17 +160,15 @@ def _action_no_config(preset: ProviderPreset) -> Optional[str]:
     无存储配置时选择操作
 
     Returns:
-        "configure" | "back" | None
+        "configure" | "back" | "exit" | None
     """
     choices = [
         questionary.Choice(
-            f"🔧 Configure  配置 {preset.label} 参数",
+            f"Configure  配置 {preset.label} 参数",
             value="configure",
         ),
-        questionary.Choice(
-            "↩  Go back  返回重新选择",
-            value="back",
-        ),
+        questionary.Choice("Go back  返回重新选择", value=BACK),
+        questionary.Choice("Exit  退出", value=EXIT),
     ]
 
     return questionary.select(
@@ -175,9 +182,12 @@ def _action_no_config(preset: ProviderPreset) -> Optional[str]:
 #  引导 & 交互式配置
 # ═══════════════════════════════════════════════════════════
 
-def _show_guidance(provider_name: ProviderName) -> None:
+def _show_guidance(provider_name: ProviderName) -> Optional[str]:
     """Display setup guidance for a provider
     显示提供商的设置引导
+
+    Returns:
+        "continue" to proceed, BACK to go back, EXIT or None to exit
     """
     guidance = get_provider_guidance(provider_name)
     if guidance:
@@ -189,21 +199,30 @@ def _show_guidance(provider_name: ProviderName) -> None:
                 ui.console.print(f"  [dim]{line}[/]")
         print()
 
-        ready = questionary.confirm(
-            "Ready? Continue  已准备好，继续配置:",
-            default=True,
+        choices = [
+            questionary.Choice("Continue  继续配置", value="continue"),
+            questionary.Choice("Go back  返回重新选择", value=BACK),
+            questionary.Choice("Exit  退出", value=EXIT),
+        ]
+        ready = questionary.select(
+            "Ready? 已准备好，选择操作:",
+            choices=choices,
+            default=choices[0],
         ).ask()
-        if not ready:
-            ui.hint("请按照上述步骤准备好环境后重新运行 claude-adapter-py")
-            raise typer.Exit(0)
+        if ready == BACK or ready == EXIT or not ready:
+            return ready if ready else EXIT
+    return "continue"
 
 
 def _configure_provider(
     provider_name: ProviderName,
     preset: ProviderPreset,
-) -> AdapterConfig:
+) -> Optional[AdapterConfig]:
     """Interactive provider configuration
     交互式提供商配置
+
+    Returns:
+        AdapterConfig when done, None when user chose Go back
     """
     ui.header(f"Configure {preset.label}  配置参数")
 
@@ -264,11 +283,50 @@ def _configure_provider(
     xml_choice = questionary.Choice("xml  prompt-based, for local models", value="xml")
     default_fmt = native_choice if preset.default_tool_format == "native" else xml_choice
 
+    tool_choices = [native_choice, xml_choice]
+    tool_choices.append(questionary.Choice("Go back  返回重新选择", value=BACK))
+    tool_choices.append(questionary.Choice("Exit  退出", value=EXIT))
+
     tool_format = questionary.select(
         "Tool calling format 工具调用格式:",
-        choices=[native_choice, xml_choice],
+        choices=tool_choices,
         default=default_fmt,
     ).ask()
+
+    if tool_format == BACK:
+        return None
+    if tool_format == EXIT or not tool_format:
+        raise typer.Exit(0)
+
+    # ── Max context window ──
+    # LM Studio: required 必填 (must match model n_ctx to avoid n_keep>=n_ctx)
+    # Others: optional, use preset default if empty
+    is_lmstudio = provider_name == "lmstudio"
+    default_ctx = ""
+    if existing and existing.max_context_window is not None:
+        default_ctx = str(existing.max_context_window)
+    elif preset.max_context_window:
+        default_ctx = str(preset.max_context_window) if not is_lmstudio else "4096"
+    if is_lmstudio and not default_ctx:
+        default_ctx = "4096"
+
+    ctx_str = questionary.text(
+        "Max context window 最大上下文长度 (LM Studio 必填 required):"
+        if is_lmstudio
+        else "Max context window 最大上下文长度 (optional 可选, Enter=default):",
+        default=default_ctx,
+    ).ask()
+
+    max_context_window: Optional[int] = None
+    if ctx_str and ctx_str.strip():
+        try:
+            n = int(ctx_str.strip())
+            max_context_window = n if n > 0 else (4096 if is_lmstudio else preset.max_context_window)
+        except ValueError:
+            max_context_window = 4096 if is_lmstudio else preset.max_context_window
+    else:
+        # LM Studio: require a value, use safe default 4096
+        max_context_window = 4096 if is_lmstudio else preset.max_context_window
 
     # ── Build & save ──
     config = AdapterConfig(
@@ -282,7 +340,7 @@ def _configure_provider(
             haiku=haiku_model,
         ),
         tool_format=tool_format,  # type: ignore
-        max_context_window=preset.max_context_window,
+        max_context_window=max_context_window,
     )
 
     save_provider_config(config)
@@ -300,7 +358,7 @@ def _configure_provider(
 def _display_config(config: AdapterConfig, preset: ProviderPreset, port: Optional[int]) -> None:
     """Display current configuration summary 显示当前配置摘要"""
     print()
-    ui.table([
+    rows: list[tuple[str, str]] = [
         ("Provider", preset.label),
         ("Base URL", config.base_url),
         ("Port", str(port or config.port or 3080)),
@@ -308,7 +366,10 @@ def _display_config(config: AdapterConfig, preset: ProviderPreset, port: Optiona
         ("Sonnet", config.models.sonnet),
         ("Haiku", config.models.haiku),
         ("Tool Format", config.tool_format),
-    ])
+    ]
+    if config.max_context_window is not None:
+        rows.append(("Max context window", str(config.max_context_window)))
+    ui.table(rows)
 
 
 def _update_claude_and_start(
@@ -378,51 +439,62 @@ def main(
     while True:
         # ── Select provider 选择提供商 ──
         provider_name = _select_provider()
+        if provider_name == BACK:
+            continue
         if not provider_name:
             ui.warning("No provider selected")
             raise typer.Exit(0)
 
-        preset = get_provider_preset(provider_name)
-        existing = load_provider_config(provider_name)
+        preset = get_provider_preset(provider_name)  # type: ignore
+        existing = load_provider_config(provider_name)  # type: ignore
 
         if existing and not reconfigure:
             # ── Has saved config 已有存储配置 ──
             action = _action_has_config(preset)
 
             if action == "use":
-                set_active_provider(provider_name)
+                set_active_provider(provider_name)  # type: ignore
                 _display_config(existing, preset, port)
                 _update_claude_and_start(existing, port, no_claude_settings)
                 return
 
-            elif action == "reconfigure":
-                _show_guidance(provider_name)
-                config = _configure_provider(provider_name, preset)
+            if action == "reconfigure":
+                guidance_result = _show_guidance(provider_name)  # type: ignore
+                if guidance_result == BACK:
+                    continue
+                if guidance_result == EXIT or not guidance_result:
+                    raise typer.Exit(0)
+                config = _configure_provider(provider_name, preset)  # type: ignore
+                if config is None:
+                    continue
                 _display_config(config, preset, port)
                 _update_claude_and_start(config, port, no_claude_settings)
                 return
 
-            else:
-                raise typer.Exit(0)
+            if action == BACK:
+                continue
+            raise typer.Exit(0)
 
         else:
             # ── No saved config 无存储配置 ──
             action = _action_no_config(preset)
 
             if action == "configure":
-                _show_guidance(provider_name)
-                config = _configure_provider(provider_name, preset)
+                guidance_result = _show_guidance(provider_name)  # type: ignore
+                if guidance_result == BACK:
+                    continue
+                if guidance_result == EXIT or not guidance_result:
+                    raise typer.Exit(0)
+                config = _configure_provider(provider_name, preset)  # type: ignore
+                if config is None:
+                    continue
                 _display_config(config, preset, port)
                 _update_claude_and_start(config, port, no_claude_settings)
                 return
 
-            elif action == "back":
-                # Loop back to provider selection
-                # 返回重新选择供应商
+            if action == BACK:
                 continue
-
-            else:
-                raise typer.Exit(0)
+            raise typer.Exit(0)
 
 
 # ═══════════════════════════════════════════════════════════
@@ -488,12 +560,20 @@ def rm(
 
     if not force:
         preset = get_provider_preset(provider_name)
-        confirm = questionary.confirm(
+        choices = [
+            questionary.Choice(f"Yes, remove  确认删除 {preset.label} 配置", value="yes"),
+            questionary.Choice("Go back  返回重新选择", value=BACK),
+            questionary.Choice("Exit  退出", value=EXIT),
+        ]
+        confirm = questionary.select(
             f"Remove configuration for {preset.label}?",
-            default=False,
+            choices=choices,
         ).ask()
-        if not confirm:
-            ui.info("Cancelled")
+        if confirm != "yes":
+            if confirm == BACK:
+                ui.info("Go back")
+            else:
+                ui.info("Cancelled")
             return
 
     delete_provider_config(provider_name)

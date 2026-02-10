@@ -5,16 +5,17 @@
 
 [English](README.md) | 中文
 
+![UI.png](./image/ui.png)
 ---
 
 ## 概述
 
-Claude Adapter Python 是一个本地 HTTP 代理服务器，让你能够在 [**Claude Code**](https://github.com/anthropics/claude-code) 中灵活使用切换，免费使用 NVIDIA **OpenAI 兼容的 API**、免费使用 Ollama 中的本地模型和Cloud模型、免费使用 LM Studio 本地模型，也可使用官方 Kimi DeepSeek Z.ai MiniMax的API。
+Claude Adapter Python 是一个本地 HTTP 代理服务器，让你能够在 [**Claude Code**](https://github.com/anthropics/claude-code) 中使用 **OpenAI 兼容的 API**。
 
 通过将 Anthropic Messages API 请求转换为 OpenAI Chat Completions 格式，可以：
 
 - 使用任何 OpenAI 兼容 API 与 Claude Code 配合
-- 轻松切换不同的 AI 提供商
+- 轻松切换不同的 AI 提供商（免费：NVIDIA、Ollama、LM Studio；付费：Kimi、DeepSeek、Z.ai、MiniMax；自定义端点）
 - 使用 Ollama 或 LM Studio 运行本地模型
 - 完整的工具调用支持，原生和 XML 两种模式
 - 流式响应，实时交互
@@ -54,25 +55,33 @@ claude-adapter-py
 
 ### 2. 选择提供商类型
 
-CLI 会显示三个分类：
+运行后首先进入提供商选择，会看到三个分类及导航选项：
 
 ```
 ? Choose provider type 选择提供商类型:
-  Free (免费)    NVIDIA, Ollama, LM Studio
-  Paid (付费)    Kimi, DeepSeek, GLM, MiniMax
-  Custom (自定义) OpenAI-compatible endpoint
+  Free    NVIDIA, Ollama, LM Studio
+  Paid    Kimi, DeepSeek, GLM, MiniMax
+  Custom  OpenAI-compatible endpoint
+  Go back  返回重新选择
+  Exit  退出
 ```
+
+![Select.png](./image/Select.png)
 
 ### 3. 选择具体提供商
 
-选择分类后，选择具体提供商：
+选择分类后，选择具体提供商（每个菜单也都有 **Go back** 和 **Exit**）：
 
 ```
 ? Choose provider 选择提供商:
   NVIDIA NIM              NVIDIA NIM API (https://build.nvidia.com/)
   Ollama                  Ollama localhost:11434 (https://ollama.com/)
   LM Studio               LM Studio localhost:1234 (https://lmstudio.ai/)
+  Go back  返回重新选择
+  Exit  退出
 ```
+
+![provider.png](./image/provider.png)
 
 ### 4. 使用已存储配置 或 配置参数
 
@@ -80,17 +89,24 @@ CLI 会显示三个分类：
 
 ```
 ? NVIDIA NIM found, choose action 已有配置，选择操作:
-  ▶  Use saved config  使用已存储的 NVIDIA NIM 配置启动
-      Reconfigure  重新配置 NVIDIA NIM 参数
+  Use saved config  使用已存储的 NVIDIA NIM 配置启动
+  Reconfigure  重新配置 NVIDIA NIM 参数
+  Go back  返回重新选择
+  Exit  退出
 ```
+
+![config.png](./image/config.png)
 
 **如果没有存储配置**：
 
 ```
 ? No config for Ollama, choose action 无已存储配置，选择操作:
-   Configure  配置 Ollama 参数
-   Go back  返回重新选择
+  Configure  配置 Ollama 参数
+  Go back  返回重新选择
+  Exit  退出
 ```
+
+每一步（包括引导确认、工具格式选择等）都提供 **Go back** 返回上一步和 **Exit** 退出。
 
 ### 5. 适配器将会
 
@@ -120,19 +136,21 @@ export ANTHROPIC_BASE_URL="http://localhost:3080"
 3. 选择模型，推荐：`minimaxai/minimax-m2.1`
 4. 配置完成后即可使用
 
+![NVIDIA.png](./image/NVIDIA.png)
+![claudecode-nvidia.png](./image/claudecode-nvidia.png)
 ### Ollama  免费，本地 + 云端
 
 Ollama 同时支持**本地模型**和**云端模型**。
 
 ```bash
 # 1. 安装 Ollama
-#    访问 https://ollama.com/download
+curl -fsSL https://ollama.com/install.sh | sh
 
 # 2. 启动服务
 ollama serve
 
 # 3. 拉取本地模型
-ollama pull qwen2.5-coder:32b
+ollama pull gpt-oss:20b
 
 # 3b. 或拉取云端模型
 ollama pull kimi-k2.5:cloud
@@ -143,6 +161,17 @@ ollama list
 
 > 启动适配器前，请确保 `ollama serve` 正在运行。
 
+![ollama_list.png](./image/ollama_list.png)
+
+![ollama_serve.png](./image/ollama_serve.png)
+
+![ollama.png](./image/ollama.png)
+
+![ollama_config.png](./image/ollama_config.png)
+
+![claudecode_ollama.png](./image/claudecode_ollama.png)
+
+![ollama_cloud.png](./image/ollama_cloud.png)
 ### LM Studio  免费，仅本地
 
 LM Studio **仅支持本地模型**，使用前需要下载、加载、启动服务。
@@ -163,6 +192,14 @@ lms server start
 
 > 默认端口 1234。建议在 LM Studio 设置中将 Context Length 调至 16384+。
 
+![lms_model.png](./image/lms_model.png)
+
+![lms_config.png](./image/lms_config.png)
+
+![lms.png](./image/lms.png)
+
+![claudecode_lms.png](./image/claudecode_lms.png)
+
 ### Kimi  付费，云端
 
 1. 访问 https://platform.moonshot.cn/console/api-keys
@@ -175,7 +212,7 @@ lms server start
 2. 注册账号并创建 API Key，格式：`sk-xxxx`
 3. 推荐模型：`deepseek-chat`
 
-### GLM Z.ai  付费，云端
+### Z.ai  付费，云端
 
 1. 访问 https://bigmodel.cn/usercenter/proj-mgmt/apikeys
 2. 注册账号并创建 API Key，格式：`xxxx.xxxx`
@@ -199,7 +236,7 @@ lms server start
 ## CLI 命令
 
 ```bash
-# 启动服务器，交互式选择提供商
+# 启动服务器（交互式：先选提供商，再选使用配置 / 重新配置 / 配置参数）
 claude-adapter-py
 
 # 强制重新配置当前提供商
@@ -214,12 +251,14 @@ claude-adapter-py --no-claude-settings
 # 列出已保存的提供商
 claude-adapter-py ls
 
-# 删除提供商配置
+# 删除提供商配置（确认时也有 Go back / Exit）
 claude-adapter-py rm <provider-name>
 
 # 查看帮助
 claude-adapter-py -h
 ```
+
+每个交互菜单都可选择 **Go back** 返回上一步或 **Exit** 退出。
 
 ## 配置文件
 
@@ -290,6 +329,10 @@ Claude Code  ->  Anthropic API 请求
 适配器会自动查找下一个可用端口，或手动指定：
 
 ```bash
+# 查询并结束占用端口
+lsof -i :3080
+kill -9 <id>
+# 或，换端口
 claude-adapter-py -p 8080
 ```
 
@@ -310,15 +353,6 @@ claude-adapter-py -r
 
 **LM Studio**：确保已用 `lms load <model>` 加载模型，且服务已用 `lms server start` 启动
 
-## 开发
-
-```bash
-pip install -e ".[dev]"
-pytest
-black src/ tests/
-ruff check src/ tests/
-mypy src/
-```
 
 ## 项目结构
 

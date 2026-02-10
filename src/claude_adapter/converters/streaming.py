@@ -67,15 +67,49 @@ async def convert_stream_to_anthropic(
         stripped = line.strip()
         if not stripped or stripped.startswith(":"):
             continue
-        
+
         if stripped.startswith("data: "):
             data_str = stripped[6:].strip()
-            
+
             if data_str == "[DONE]":
                 break
-            
+
             try:
                 chunk_data = json.loads(data_str)
+
+                # Check for error in chunk 检查 chunk 中的错误
+                if "error" in chunk_data:
+                    error = chunk_data["error"]
+                    error_type = error.get("type", "api_error")
+                    error_message = error.get("message", "Unknown error")
+
+                    # Yield error as content block 将错误作为内容块输出
+                    error_block_index = len(state.content_blocks)
+                    state.content_blocks.append({
+                        "type": "text",
+                        "text": f"Error: {error_message}",
+                    })
+
+                    yield _format_sse_event("content_block_start", {
+                        "type": "content_block_start",
+                        "index": error_block_index,
+                        "content_block": {"type": "text", "text": f"Error: {error_message}"},
+                    })
+
+                    yield _format_sse_event("content_block_stop", {
+                        "type": "content_block_stop",
+                        "index": error_block_index,
+                    })
+
+                    yield _format_sse_event("message_delta", {
+                        "type": "message_delta",
+                        "delta": {"stop_reason": "error", "stop_sequence": None},
+                        "usage": state.usage or {"input_tokens": 0, "output_tokens": 0},
+                    })
+
+                    yield _format_sse_event("message_stop", {"type": "message_stop"})
+                    return
+
                 async for event in _process_chunk(chunk_data, state):
                     yield event
             except json.JSONDecodeError:

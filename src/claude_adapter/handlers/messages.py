@@ -21,6 +21,7 @@ from ..utils.logger import logger
 from ..utils.validation import validate_anthropic_request, format_validation_errors
 from ..utils.token_usage import record_usage
 from ..utils.error_log import record_error
+from openai import APIError as OpenAIAPIError
 
 
 def _generate_request_id() -> str:
@@ -251,9 +252,21 @@ async def handle_messages_request(
 
                 # Convert to async iterator of SSE lines 转换为 SSE 行的异步迭代器
                 async def openai_line_iterator():
-                    async for chunk in openai_stream:
-                        yield f"data: {chunk.model_dump_json()}\n\n"
-                    yield "data: [DONE]\n\n"
+                    try:
+                        async for chunk in openai_stream:
+                            yield f"data: {chunk.model_dump_json()}\n\n"
+                        yield "data: [DONE]\n\n"
+                    except OpenAIAPIError as e:
+                        # Handle API errors during streaming (e.g., context length exceeded)
+                        # 处理流式传输中的 API 错误（例如：超出上下文长度）
+                        error_data = {
+                            "error": {
+                                "type": "invalid_request_error",
+                                "message": str(e),
+                            }
+                        }
+                        yield f"data: {json.dumps(error_data)}\n\n"
+                        yield "data: [DONE]\n\n"
 
                 # Convert stream to Anthropic format 将流转换为 Anthropic 格式
                 anthropic_stream = convert_stream_to_anthropic(
