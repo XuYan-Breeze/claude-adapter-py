@@ -3,17 +3,16 @@
 CLI for Claude Adapter using Typer
 使用 Typer 的 Claude 适配器命令行界面
 
-Execution flow 执行流程:
-  1. Show banner 显示横幅
-  2. Select provider category  free, paid, custom  选择提供商分类
-  3. Select provider within category 在分类中选择提供商
-  4. If saved config exists:
-     a. Use saved config 使用已存储配置
-     b. Reconfigure 重新配置参数
-  5. If no saved config:
-     a. Configure 配置参数
-     b. Go back 返回
-  6. Start server 启动服务器
+Paid providers (kimi/deepseek/glm/minimax):
+  - Direct Anthropic API, no HTTP server needed
+  - Configure API Key only
+  - Write to ~/.claude/settings.json
+  - Auto-cache to ~/.claude-adapter/providers/
+
+Free providers (nvidia/ollama/lmstudio):
+  - Requires HTTP server proxy
+  - Full configuration (Base URL, port, models)
+  - Auto-cache to ~/.claude-adapter/providers/
 """
 
 import asyncio
@@ -31,6 +30,7 @@ from .providers import (
     get_provider_preset,
     get_providers_by_category,
     get_provider_guidance,
+    PAID_PROVIDER_NAMES,
 )
 from .utils.config import (
     get_active_provider,
@@ -41,6 +41,9 @@ from .utils.config import (
     delete_provider_config,
     update_claude_json,
     update_claude_settings,
+    update_claude_settings_for_paid_provider,
+    load_paid_provider_cache,
+    save_paid_provider_to_cache,
 )
 from .utils.update import get_cached_update_info
 from .utils import ui
@@ -61,6 +64,17 @@ BACK = "back"
 EXIT = "exit"
 
 
+def _is_paid_provider(provider_name: str) -> bool:
+    """Check if provider is a paid provider
+    检查是否是付费提供商
+    """
+    return provider_name in PAID_PROVIDER_NAMES
+
+
+# ═══════════════════════════════════════════════════════════
+#  Provider selection  选择提供商
+# ═══════════════════════════════════════════════════════════
+
 def _select_provider() -> Union[Optional[ProviderName], str]:
     """Interactive provider selection with category grouping
     交互式提供商选择，带分类分组
@@ -74,11 +88,11 @@ def _select_provider() -> Union[Optional[ProviderName], str]:
     # ── Category selection 分类选择 ──
     category_choices = [
         questionary.Choice(
-            f"{CATEGORY_LABELS['free']}   NVIDIA, Ollama, LM Studio",
+            f"{CATEGORY_LABELS['free']}   NVIDIA, Ollama, LM Studio (需要启动 HTTP 服务器)",
             value="free",
         ),
         questionary.Choice(
-            f"{CATEGORY_LABELS['paid']}   Kimi, DeepSeek, GLM, MiniMax",
+            f"{CATEGORY_LABELS['paid']}   Kimi, DeepSeek, GLM, MiniMax (直接 Anthropic API，无需服务器)",
             value="paid",
         ),
         questionary.Choice(
@@ -126,127 +140,175 @@ def _select_provider() -> Union[Optional[ProviderName], str]:
 
 
 # ═══════════════════════════════════════════════════════════
-#  Action selection  操作选择
+#  Paid provider configuration  付费提供商配置
 # ═══════════════════════════════════════════════════════════
 
-def _action_has_config(preset: ProviderPreset) -> Optional[str]:
-    """When a saved config exists, choose action
-    已存储配置时选择操作
+def _configure_paid_provider(provider_name: ProviderName, preset: ProviderPreset) -> bool:
+    """Configure a paid provider (direct Anthropic API, no HTTP server)
+    配置付费提供商（直接 Anthropic API，无需 HTTP 服务器）
+
+    Returns:
+        True if configured successfully, False if cancelled
+    """
+    ui.header(f"Configure {preset.label}")
+
+    # Check for cached config 检查缓存配置
+    cached = load_paid_provider_cache(provider_name)
+    if cached:
+        print()
+        ui.info("Found cached configuration 发现已缓存的配置")
+        choices = [
+            questionary.Choice("Use cached API Key  使用已缓存的 API Key", value="use"),
+            questionary.Choice("Reconfigure  重新配置", value="reconfig"),
+            questionary.Choice("Go back  返回", value=BACK),
+            questionary.Choice("Exit  退出", value=EXIT),
+        ]
+        action = questionary.select(
+            f"{preset.label} - 已缓存配置",
+            choices=choices,
+        ).ask()
+
+        if action == "use":
+            api_key = cached["api_key"]
+        elif action == "reconfig":
+            api_key = None
+        elif action == BACK:
+            return False
+        else:
+            sys.exit(0)
+    else:
+        api_key = None
+
+    # Get API Key if not using cache 如果不使用缓存，获取 API Key
+    if api_key is None:
+        print()
+        api_key = questionary.password(
+            f"Enter {preset.label} API Key ({preset.api_key_placeholder}):",
+        ).ask()
+
+        if not api_key or not api_key.strip():
+            ui.warning("API Key is required")
+            return False
+
+    # Configure and write to ~/.claude/settings.json
+    try:
+        update_claude_json()
+        update_claude_settings_for_paid_provider(
+            provider_name=provider_name,
+            api_key=api_key.strip(),
+            model_name=preset.default_models.opus,
+            base_url=preset.base_url,
+        )
+    except Exception as e:
+        ui.error("Failed to update Claude settings", str(e))
+        return False
+
+    # Save to cache 保存到缓存
+    try:
+        save_paid_provider_to_cache(
+            provider_name=provider_name,
+            api_key=api_key.strip(),
+            opus_model=preset.default_models.opus,
+            sonnet_model=preset.default_models.sonnet,
+            haiku_model=preset.default_models.haiku,
+            base_url=preset.base_url,
+        )
+    except Exception as e:
+        ui.warning(f"Failed to cache config: {str(e)}")
+
+    print()
+    ui.success(f"{preset.label} configured successfully!")
+    ui.info("无需启动 HTTP 服务器，直接使用 Claude Code 即可")
+    print()
+    ui.hint(f"API Key 已保存到 ~/.claude/settings.json")
+    print()
+
+    return True
+
+
+# ═══════════════════════════════════════════════════════════
+#  Free provider configuration  免费提供商配置
+# ═══════════════════════════════════════════════════════════
+
+def _action_has_config_free(preset: ProviderPreset) -> Optional[str]:
+    """When a saved config exists (free provider), choose action
+    已有存储配置时选择操作（免费提供商）
 
     Returns:
         "use" | "reconfigure" | "back" | "exit" | None
     """
     choices = [
-        questionary.Choice(
-            f"Use saved config  使用已存储的 {preset.label} 配置启动",
-            value="use",
-        ),
-        questionary.Choice(
-            f"Reconfigure  重新配置 {preset.label} 参数",
-            value="reconfigure",
-        ),
+        questionary.Choice("Use saved config  使用已缓存的配置", value="use"),
+        questionary.Choice("Reconfigure  重新配置参数", value="reconfigure"),
         questionary.Choice("Go back  返回重新选择", value=BACK),
         questionary.Choice("Exit  退出", value=EXIT),
     ]
 
     return questionary.select(
-        f"{preset.label} found, choose action 已有配置，选择操作:",
+        f"{preset.label} - 已有缓存配置",
         choices=choices,
     ).ask()
 
 
-def _action_no_config(preset: ProviderPreset) -> Optional[str]:
-    """When no saved config, choose action
-    无存储配置时选择操作
+def _action_no_config_free(preset: ProviderPreset) -> Optional[str]:
+    """When no saved config (free provider), choose action
+    无存储配置时选择操作（免费提供商）
 
     Returns:
         "configure" | "back" | "exit" | None
     """
     choices = [
-        questionary.Choice(
-            f"Configure  配置 {preset.label} 参数",
-            value="configure",
-        ),
+        questionary.Choice("Configure  配置参数并启动", value="configure"),
         questionary.Choice("Go back  返回重新选择", value=BACK),
         questionary.Choice("Exit  退出", value=EXIT),
     ]
 
     return questionary.select(
-        f"No config for {preset.label}, choose action 无已存储配置，选择操作:",
+        f"{preset.label} - 尚未配置",
         choices=choices,
     ).ask()
 
 
-# ═══════════════════════════════════════════════════════════
-#  Guidance & interactive configuration
-#  引导 & 交互式配置
-# ═══════════════════════════════════════════════════════════
-
-def _show_guidance(provider_name: ProviderName) -> Optional[str]:
-    """Display setup guidance for a provider
-    显示提供商的设置引导
-
-    Returns:
-        "continue" to proceed, BACK to go back, EXIT or None to exit
-    """
-    guidance = get_provider_guidance(provider_name)
-    if guidance:
-        print()
-        for line in guidance:
-            if line == "":
-                print()
-            else:
-                ui.console.print(f"  [dim]{line}[/]")
-        print()
-
-        choices = [
-            questionary.Choice("Continue  继续配置", value="continue"),
-            questionary.Choice("Go back  返回重新选择", value=BACK),
-            questionary.Choice("Exit  退出", value=EXIT),
-        ]
-        ready = questionary.select(
-            "Ready? 已准备好，选择操作:",
-            choices=choices,
-            default=choices[0],
-        ).ask()
-        if ready == BACK or ready == EXIT or not ready:
-            return ready if ready else EXIT
-    return "continue"
-
-
-def _configure_provider(
+def _configure_free_provider(
     provider_name: ProviderName,
     preset: ProviderPreset,
+    is_local: bool = False,
 ) -> Optional[AdapterConfig]:
-    """Interactive provider configuration
-    交互式提供商配置
+    """Configure a free provider (requires HTTP server)
+    配置免费提供商（需要 HTTP 服务器）
 
     Returns:
         AdapterConfig when done, None when user chose Go back
     """
-    ui.header(f"Configure {preset.label}  配置参数")
+    ui.header(f"Configure {preset.label}")
 
     existing = load_provider_config(provider_name)
 
-    # ── API Key ──
-    api_key = preset.api_key_placeholder
-    if preset.api_key_required:
+    # ── API Key (not needed for local services) ──
+    if is_local:
+        api_key = ""
+    elif preset.api_key_required:
         default_key = existing.api_key if existing else ""
-        api_key_input = questionary.text(
-            f"API Key  {preset.api_key_placeholder}:",
-            default=default_key,
+        api_key_input = questionary.password(
+            f"API Key ({preset.api_key_placeholder}):",
+            default=default_key if default_key else None,
         ).ask()
-        if api_key_input:
-            api_key = api_key_input
+        api_key = api_key_input or preset.api_key_placeholder
+    else:
+        api_key = ""
 
     # ── Base URL ──
-    default_url = existing.base_url if existing else preset.base_url
-    base_url = questionary.text(
-        "Base URL:",
-        default=default_url,
-    ).ask()
-    if not base_url:
+    if is_local:
+        ui.info(f"Server URL: {preset.base_url}")
         base_url = preset.base_url
+    else:
+        default_url = existing.base_url if existing else preset.base_url
+        base_url = questionary.text(
+            "Base URL:",
+            default=default_url,
+        ).ask()
+        if not base_url:
+            base_url = preset.base_url
 
     # ── Server port ──
     default_port = str(existing.port) if existing and existing.port else "3080"
@@ -299,8 +361,6 @@ def _configure_provider(
         raise typer.Exit(0)
 
     # ── Max context window ──
-    # LM Studio: required 必填 (must match model n_ctx to avoid n_keep>=n_ctx)
-    # Others: optional, use preset default if empty
     is_lmstudio = provider_name == "lmstudio"
     default_ctx = ""
     if existing and existing.max_context_window is not None:
@@ -325,7 +385,6 @@ def _configure_provider(
         except ValueError:
             max_context_window = 4096 if is_lmstudio else preset.max_context_window
     else:
-        # LM Studio: require a value, use safe default 4096
         max_context_window = 4096 if is_lmstudio else preset.max_context_window
 
     # ── Build & save ──
@@ -351,8 +410,7 @@ def _configure_provider(
 
 
 # ═══════════════════════════════════════════════════════════
-#  Display config & start server
-#  显示配置 & 启动服务器
+#  Display config & start server  显示配置 & 启动服务器
 # ═══════════════════════════════════════════════════════════
 
 def _display_config(config: AdapterConfig, preset: ProviderPreset, port: Optional[int]) -> None:
@@ -407,7 +465,7 @@ def _update_claude_and_start(
 
 
 # ═══════════════════════════════════════════════════════════
-#  Main CLI callback
+#  Main CLI callback  主 CLI 回调
 # ═══════════════════════════════════════════════════════════
 
 @app.callback()
@@ -432,8 +490,7 @@ def main(
         ui.update_notify(update_info.current, update_info.latest)
 
     # ══════════════════════════════════════════════════
-    #  Main loop: always starts with provider selection
-    #  主循环：始终从选择供应商开始
+    #  Main loop  主循环
     # ══════════════════════════════════════════════════
 
     while True:
@@ -445,56 +502,118 @@ def main(
             ui.warning("No provider selected")
             raise typer.Exit(0)
 
-        preset = get_provider_preset(provider_name)  # type: ignore
-        existing = load_provider_config(provider_name)  # type: ignore
+        provider_name_str = provider_name  # type: ignore
+        preset = get_provider_preset(provider_name_str)
+        is_paid = _is_paid_provider(provider_name_str)
 
-        if existing and not reconfigure:
-            # ── Has saved config 已有存储配置 ──
-            action = _action_has_config(preset)
+        if is_paid:
+            # ═════ Paid provider (direct Anthropic, no HTTP server) ═════
+            cached = load_paid_provider_cache(provider_name_str)
 
-            if action == "use":
-                set_active_provider(provider_name)  # type: ignore
-                _display_config(existing, preset, port)
-                _update_claude_and_start(existing, port, no_claude_settings)
-                return
+            if cached and not reconfigure:
+                # Has cached config 有缓存配置
+                choices = [
+                    questionary.Choice("Use cached config  使用已缓存的配置", value="use"),
+                    questionary.Choice("Reconfigure  重新配置", value="reconfig"),
+                    questionary.Choice("Go back  返回", value=BACK),
+                    questionary.Choice("Exit  退出", value=EXIT),
+                ]
+                action = questionary.select(
+                    f"{preset.label} - 付费提供商 (直接 Anthropic API)",
+                    choices=choices,
+                ).ask()
 
-            if action == "reconfigure":
-                guidance_result = _show_guidance(provider_name)  # type: ignore
-                if guidance_result == BACK:
-                    continue
-                if guidance_result == EXIT or not guidance_result:
+                if action == "use":
+                    # Use cached API key 使用缓存的 API Key
+                    try:
+                        update_claude_json()
+                        update_claude_settings_for_paid_provider(
+                            provider_name=provider_name_str,
+                            api_key=cached["api_key"],
+                            model_name=preset.default_models.opus,
+                            base_url=cached.get("base_url", preset.base_url),
+                        )
+                        print()
+                        ui.success(f"{preset.label} configured from cache!")
+                        ui.info("无需启动 HTTP 服务器，直接使用 Claude Code 即可")
+                    except Exception as e:
+                        ui.error("Failed to save settings", str(e))
                     raise typer.Exit(0)
-                config = _configure_provider(provider_name, preset)  # type: ignore
-                if config is None:
-                    continue
-                _display_config(config, preset, port)
-                _update_claude_and_start(config, port, no_claude_settings)
-                return
 
-            if action == BACK:
+                if action == "reconfig":
+                    _configure_paid_provider(provider_name_str, preset)
+                    raise typer.Exit(0)
+
+                if action == BACK:
+                    continue
+                raise typer.Exit(0)
+
+            else:
+                # No cached config, configure now 无缓存，立即配置
+                if _configure_paid_provider(provider_name_str, preset):
+                    raise typer.Exit(0)
                 continue
-            raise typer.Exit(0)
 
         else:
-            # ── No saved config 无存储配置 ──
-            action = _action_no_config(preset)
+            # ═════ Free provider (requires HTTP server) ═════
+            is_local = provider_name_str in ("ollama", "lmstudio")
+            existing = load_provider_config(provider_name_str)
 
-            if action == "configure":
-                guidance_result = _show_guidance(provider_name)  # type: ignore
-                if guidance_result == BACK:
-                    continue
-                if guidance_result == EXIT or not guidance_result:
-                    raise typer.Exit(0)
-                config = _configure_provider(provider_name, preset)  # type: ignore
-                if config is None:
-                    continue
-                _display_config(config, preset, port)
-                _update_claude_and_start(config, port, no_claude_settings)
-                return
+            if existing and not reconfigure:
+                # Has saved config 已有存储配置
+                action = _action_has_config_free(preset)
 
-            if action == BACK:
-                continue
-            raise typer.Exit(0)
+                if action == "use":
+                    set_active_provider(provider_name_str)
+                    _display_config(existing, preset, port)
+                    _update_claude_and_start(existing, port, no_claude_settings)
+                    return
+
+                if action == "reconfigure":
+                    guidance = get_provider_guidance(provider_name_str)
+                    if guidance:
+                        print()
+                        for line in guidance:
+                            if line == "":
+                                print()
+                            else:
+                                ui.console.print(f"  [dim]{line}[/]")
+                        print()
+                    config = _configure_free_provider(provider_name_str, preset, is_local)
+                    if config is None:
+                        continue
+                    _display_config(config, preset, port)
+                    _update_claude_and_start(config, port, no_claude_settings)
+                    return
+
+                if action == BACK:
+                    continue
+                raise typer.Exit(0)
+
+            else:
+                # No saved config 无存储配置
+                action = _action_no_config_free(preset)
+
+                if action == "configure":
+                    guidance = get_provider_guidance(provider_name_str)
+                    if guidance:
+                        print()
+                        for line in guidance:
+                            if line == "":
+                                print()
+                            else:
+                                ui.console.print(f"  [dim]{line}[/]")
+                        print()
+                    config = _configure_free_provider(provider_name_str, preset, is_local)
+                    if config is None:
+                        continue
+                    _display_config(config, preset, port)
+                    _update_claude_and_start(config, port, no_claude_settings)
+                    return
+
+                if action == BACK:
+                    continue
+                raise typer.Exit(0)
 
 
 # ═══════════════════════════════════════════════════════════
@@ -516,25 +635,40 @@ def ls() -> None:
 
     tbl = Table(show_header=True, show_edge=False, padding=(0, 2))
     tbl.add_column("Provider", style="bold")
+    tbl.add_column("Type", style="cyan")
     tbl.add_column("Base URL")
     tbl.add_column("Models")
     tbl.add_column("Active", justify="center")
 
     for pname in saved:
         config = load_provider_config(pname)
-        if not config:
-            continue
-
         preset = get_provider_preset(pname)
+        is_paid = _is_paid_provider(pname)
         is_active = "✔" if pname == active else ""
 
-        models_str = config.models.opus
-        if config.models.sonnet != config.models.opus:
-            models_str += f", {config.models.sonnet}"
-        if config.models.haiku not in [config.models.opus, config.models.sonnet]:
-            models_str += f", {config.models.haiku}"
+        # Determine type label
+        if is_paid:
+            type_label = "[Paid] 直接 Anthropic"
+        elif pname in ("ollama", "lmstudio"):
+            type_label = "[Free] 本地"
+        else:
+            type_label = "[Free] 云端"
 
-        tbl.add_row(preset.label, config.base_url, models_str, is_active)
+        if config:
+            models_str = config.models.opus
+            if config.models.sonnet != config.models.opus:
+                models_str += f", {config.models.sonnet}"
+            if config.models.haiku not in [config.models.opus, config.models.sonnet]:
+                models_str += f", {config.models.haiku}"
+            tbl.add_row(preset.label, type_label, config.base_url, models_str, is_active)
+        else:
+            # Paid provider without full config (only has cache)
+            cached = load_paid_provider_cache(pname)
+            if cached:
+                base_url = cached.get("base_url", preset.base_url)
+                models = cached.get("default_models", {})
+                models_str = models.get("opus", preset.default_models.opus)
+                tbl.add_row(preset.label, type_label, base_url, models_str, is_active)
 
     ui.console.print(tbl)
     print()
@@ -552,14 +686,18 @@ def rm(
         raise typer.Exit(1)
 
     provider_name: ProviderName = provider  # type: ignore
+    preset = get_provider_preset(provider_name)
 
-    config = load_provider_config(provider_name)
-    if not config:
+    # Check if paid provider (only has cache, no full config)
+    is_paid = _is_paid_provider(provider_name)
+    config = load_provider_config(provider_name) if not is_paid else None
+    cached = load_paid_provider_cache(provider_name) if is_paid else None
+
+    if not config and not cached:
         ui.warning(f"No saved configuration for {provider}")
         return
 
     if not force:
-        preset = get_provider_preset(provider_name)
         choices = [
             questionary.Choice(f"Yes, remove  确认删除 {preset.label} 配置", value="yes"),
             questionary.Choice("Go back  返回重新选择", value=BACK),
@@ -576,7 +714,19 @@ def rm(
                 ui.info("Cancelled")
             return
 
-    delete_provider_config(provider_name)
+    # Delete config
+    if config:
+        delete_provider_config(provider_name)
+
+    # Delete cache
+    if cached:
+        try:
+            from .utils.config import PROVIDERS_DIR
+            cache_file = PROVIDERS_DIR / f"{provider_name}.json"
+            if cache_file.exists():
+                cache_file.unlink()
+        except Exception:
+            pass
 
     if get_active_provider() == provider_name:
         set_active_provider(None)

@@ -11,6 +11,15 @@ from .models.config import ProviderPreset, ProviderName, ModelConfig
 # Provider category type 提供商分类类型
 ProviderCategory = Literal["free", "paid", "custom"]
 
+# Paid provider names for direct Anthropic configuration
+# 付费提供商名称（直接配置 Anthropic，无需启动 HTTP 服务器）
+PAID_PROVIDER_NAMES: tuple[Literal["kimi", "deepseek", "glm", "minimax"], ...] = (
+    "kimi",
+    "deepseek",
+    "glm",
+    "minimax",
+)
+
 # ─── Category definitions 分类定义 ───
 PROVIDER_CATEGORIES: dict[ProviderCategory, list[ProviderName]] = {
     "free": ["nvidia", "ollama", "lmstudio"],
@@ -62,28 +71,32 @@ PROVIDER_GUIDANCE: dict[ProviderName, list[str]] = {
         "   若模型实际上下文为 4096，配置时请将「上下文窗口」设为 4096，避免 n_keep>=n_ctx 错误",
     ],
     "kimi": [
-        "Kimi (月之暗面) 使用步骤:",
+        "Kimi (月之暗面) Anthropic 直接配置:",
         "   1. 访问 https://platform.moonshot.cn/console/api-keys",
         "   2. 注册账号并创建 API Key (格式: sk-xxxx)",
         "   3. 推荐模型: kimi-k2.5",
+        "   4. 配置完成后直接使用 Claude Code，无需启动 HTTP 服务器",
     ],
     "deepseek": [
-        "DeepSeek 使用步骤:",
+        "DeepSeek Anthropic 直接配置:",
         "   1. 访问 https://platform.deepseek.com/api_keys",
         "   2. 注册账号并创建 API Key (格式: sk-xxxx)",
         "   3. 推荐模型: deepseek-chat",
+        "   4. 配置完成后直接使用 Claude Code，无需启动 HTTP 服务器",
     ],
     "glm": [
-        "Z.ai (智谱 AI) 使用步骤:",
+        "Z.ai (智谱 AI) Anthropic 直接配置:",
         "   1. 访问 https://bigmodel.cn/usercenter/proj-mgmt/apikeys",
         "   2. 注册账号并创建 API Key (格式: xxxx.xxxx)",
         "   3. 推荐模型: glm-4.7",
+        "   4. 配置完成后直接使用 Claude Code，无需启动 HTTP 服务器",
     ],
     "minimax": [
-        "MiniMax 使用步骤:",
+        "MiniMax Anthropic 直接配置:",
         "   1. 访问 https://platform.minimaxi.com/user-center/basic-information/interface-key",
         "   2. 注册账号并创建 API Key (格式: eyxxxx)",
         "   3. 推荐模型: MiniMax-M2.1",
+        "   4. 配置完成后直接使用 Claude Code，无需启动 HTTP 服务器",
     ],
     "custom": [
         "自定义 OpenAI-compatible 接口:",

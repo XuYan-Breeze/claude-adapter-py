@@ -77,38 +77,44 @@ async def convert_stream_to_anthropic(
             try:
                 chunk_data = json.loads(data_str)
 
-                # Check for error in chunk 检查 chunk 中的错误
+                # Check for error in chunk - only if it looks like a real API error
+                # Only treat as error if error is a dict with message/type fields
+                # 检查 chunk 中的错误 - 只在看起来像真正的API错误时才处理
+                # 只有当error是包含message/type字段的字典时才视为错误
                 if "error" in chunk_data:
                     error = chunk_data["error"]
-                    error_type = error.get("type", "api_error")
-                    error_message = error.get("message", "Unknown error")
+                    # Only treat as error if it's a dict with required fields
+                    # 只在是包含必需字段的字典时才视为错误
+                    if isinstance(error, dict) and ("message" in error or "type" in error):
+                        error_type = error.get("type", "api_error")
+                        error_message = error.get("message", "Unknown error")
 
-                    # Yield error as content block 将错误作为内容块输出
-                    error_block_index = len(state.content_blocks)
-                    state.content_blocks.append({
-                        "type": "text",
-                        "text": f"Error: {error_message}",
-                    })
+                        # Yield error as content block 将错误作为内容块输出
+                        error_block_index = len(state.content_blocks)
+                        state.content_blocks.append({
+                            "type": "text",
+                            "text": f"Error: {error_message}",
+                        })
 
-                    yield _format_sse_event("content_block_start", {
-                        "type": "content_block_start",
-                        "index": error_block_index,
-                        "content_block": {"type": "text", "text": f"Error: {error_message}"},
-                    })
+                        yield _format_sse_event("content_block_start", {
+                            "type": "content_block_start",
+                            "index": error_block_index,
+                            "content_block": {"type": "text", "text": f"Error: {error_message}"},
+                        })
 
-                    yield _format_sse_event("content_block_stop", {
-                        "type": "content_block_stop",
-                        "index": error_block_index,
-                    })
+                        yield _format_sse_event("content_block_stop", {
+                            "type": "content_block_stop",
+                            "index": error_block_index,
+                        })
 
-                    yield _format_sse_event("message_delta", {
-                        "type": "message_delta",
-                        "delta": {"stop_reason": "error", "stop_sequence": None},
-                        "usage": state.usage or {"input_tokens": 0, "output_tokens": 0},
-                    })
+                        yield _format_sse_event("message_delta", {
+                            "type": "message_delta",
+                            "delta": {"stop_reason": "error", "stop_sequence": None},
+                            "usage": state.usage or {"input_tokens": 0, "output_tokens": 0},
+                        })
 
-                    yield _format_sse_event("message_stop", {"type": "message_stop"})
-                    return
+                        yield _format_sse_event("message_stop", {"type": "message_stop"})
+                        return
 
                 async for event in _process_chunk(chunk_data, state):
                     yield event

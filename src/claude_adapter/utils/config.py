@@ -256,8 +256,124 @@ def get_config_dir() -> Path:
 
 def get_providers_dir() -> Path:
     """Get the providers directory path 获取提供商目录路径
-    
+
     Returns:
         Providers directory path 提供商目录路径
     """
     return PROVIDERS_DIR
+
+
+# ─── Paid provider configuration (direct Anthropic format)
+# 付费提供商配置（直接 Anthropic 格式，无需 HTTP 服务器）
+# ───
+
+
+def update_claude_settings_for_paid_provider(
+    provider_name: str,
+    api_key: str,
+    model_name: str,
+    base_url: str,
+) -> None:
+    """Update ~/.claude/settings.json with direct Anthropic API for paid providers
+    为付费提供商更新 ~/.claude/settings.json（直接 Anthropic API，无需 HTTP 服务器）
+
+    Args:
+        provider_name: Provider name (kimi/deepseek/glm/minimax)
+        api_key: API key for the provider
+        model_name: Model name to use
+        base_url: Anthropic API base URL
+    """
+    ensure_dir_exists(CLAUDE_SETTINGS_DIR)
+
+    # Load existing or create new
+    settings = ClaudeSettings()
+    if CLAUDE_SETTINGS_PATH.exists():
+        try:
+            with open(CLAUDE_SETTINGS_PATH, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            settings = ClaudeSettings(**data)
+        except Exception:
+            pass
+
+    # Update environment variables - direct Anthropic API, no proxy
+    env = settings.env or {}
+    env.update({
+        "ANTHROPIC_BASE_URL": base_url,
+        "ANTHROPIC_AUTH_TOKEN": api_key,
+        "ANTHROPIC_DEFAULT_OPUS_MODEL": model_name,
+        "ANTHROPIC_DEFAULT_SONNET_MODEL": model_name,
+        "ANTHROPIC_DEFAULT_HAIKU_MODEL": model_name,
+    })
+    settings.env = env
+
+    # Save
+    with open(CLAUDE_SETTINGS_PATH, "w", encoding="utf-8") as f:
+        json.dump(settings.model_dump(exclude_none=True), f, indent=2, ensure_ascii=False)
+
+
+def load_paid_provider_cache(provider_name: str) -> Optional[dict]:
+    """Load cached paid provider configuration
+    加载缓存的付费提供商配置
+
+    Args:
+        provider_name: Provider name
+
+    Returns:
+        Cached config dict or None
+    """
+    from ..providers import PAID_PROVIDER_NAMES
+    if provider_name not in PAID_PROVIDER_NAMES:
+        return None
+
+    cache_file = PROVIDERS_DIR / f"{provider_name}.json"
+    if not cache_file.exists():
+        return None
+
+    try:
+        with open(cache_file, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return None
+
+
+def save_paid_provider_to_cache(
+    provider_name: str,
+    api_key: str,
+    opus_model: str,
+    sonnet_model: str,
+    haiku_model: str,
+    base_url: str,
+) -> None:
+    """Save paid provider to cache file
+    将付费提供商保存到缓存文件
+
+    Args:
+        provider_name: Provider name
+        api_key: API key
+        opus_model: Opus model name
+        sonnet_model: Sonnet model name
+        haiku_model: Haiku model name
+        base_url: Anthropic base URL
+    """
+    from ..providers import get_provider_preset
+
+    _ensure_dirs()
+    preset = get_provider_preset(provider_name)  # type: ignore
+
+    config = {
+        "provider": provider_name,
+        "api_key": api_key,
+        "base_url": base_url,
+        "created_at": datetime.now().isoformat(),
+        "last_updated": datetime.now().isoformat(),
+        "default_models": {
+            "opus": opus_model,
+            "sonnet": sonnet_model,
+            "haiku": haiku_model,
+        },
+        "preset_label": preset.label,
+    }
+
+    cache_file = PROVIDERS_DIR / f"{provider_name}.json"
+    with open(cache_file, "w", encoding="utf-8") as f:
+        json.dump(config, f, indent=2, ensure_ascii=False)
