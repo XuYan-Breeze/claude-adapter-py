@@ -259,9 +259,23 @@ async def handle_messages_request(
                     except OpenAIAPIError as e:
                         # Handle API errors during streaming (e.g., context length exceeded)
                         # 处理流式传输中的 API 错误（例如：超出上下文长度）
+                        record_error(e, request_id, config.base_url, requested_model, True)
                         error_data = {
                             "error": {
                                 "type": "invalid_request_error",
+                                "message": str(e),
+                            }
+                        }
+                        yield f"data: {json.dumps(error_data)}\n\n"
+                        yield "data: [DONE]\n\n"
+                    except Exception as e:
+                        # Handle connection/protocol errors (e.g. peer closed connection)
+                        # 与 claude-adapter (TS) 一致：捕获所有流式迭代中的异常并返回错误 SSE
+                        record_error(e, request_id, config.base_url, requested_model, True)
+                        req_logger.warn("Stream iteration error", {"error": str(e), "mode": "stream"})
+                        error_data = {
+                            "error": {
+                                "type": "api_error",
                                 "message": str(e),
                             }
                         }

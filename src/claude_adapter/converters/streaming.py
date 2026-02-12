@@ -120,6 +120,30 @@ async def convert_stream_to_anthropic(
                     yield event
             except json.JSONDecodeError:
                 continue
+            except Exception as e:
+                # 上游畸形 chunk 或解析异常：以错误内容块正常结束流，避免 ASGI 未处理异常
+                error_message = str(e)
+                error_block_index = len(state.content_blocks)
+                state.content_blocks.append({
+                    "type": "text",
+                    "text": f"Error: {error_message}",
+                })
+                yield _format_sse_event("content_block_start", {
+                    "type": "content_block_start",
+                    "index": error_block_index,
+                    "content_block": {"type": "text", "text": f"Error: {error_message}"},
+                })
+                yield _format_sse_event("content_block_stop", {
+                    "type": "content_block_stop",
+                    "index": error_block_index,
+                })
+                yield _format_sse_event("message_delta", {
+                    "type": "message_delta",
+                    "delta": {"stop_reason": "error", "stop_sequence": None},
+                    "usage": state.usage or {"input_tokens": 0, "output_tokens": 0},
+                })
+                yield _format_sse_event("message_stop", {"type": "message_stop"})
+                return
     
     # Send message_stop event 发送 message_stop 事件
     if state.usage:
