@@ -292,7 +292,7 @@ def _configure_free_provider(
         default_key = existing.api_key if existing else ""
         api_key_input = questionary.password(
             f"API Key ({preset.api_key_placeholder}):",
-            default=default_key if default_key else None,
+            default=default_key,
         ).ask()
         api_key = api_key_input or preset.api_key_placeholder
     else:
