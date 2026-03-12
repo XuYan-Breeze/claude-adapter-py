@@ -1,7 +1,7 @@
 # Claude Adapter Python
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Python 3.12+](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/downloads/)
+[![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 
 [English](#overview) | [中文](README_CN.md)
 
@@ -314,6 +314,73 @@ Uses OpenAI native function calling. Best for NVIDIA, Kimi, DeepSeek, GLM, MiniM
 ### XML mode  Recommended for local models
 
 Injects XML tool instructions into the system prompt. Models output `<tool_code>` XML tags. Better for local models without native function calling support.
+
+## Provider Capability Matrix
+
+| Provider | Startup mode | Local proxy server | Recommended tool mode | Default context window |
+|---|---|---|---|---|
+| NVIDIA NIM | Cloud | Required | native | 128k |
+| Ollama | Local/Cloud | Required | native (xml for weaker local models) | 8k |
+| LM Studio | Local | Required | xml (or native if model supports it) | 128k (configure based on model) |
+| Kimi | Cloud (Anthropic endpoint) | Not required | native | provider-defined |
+| DeepSeek | Cloud (Anthropic endpoint) | Not required | native | provider-defined |
+| GLM | Cloud (Anthropic endpoint) | Not required | native | provider-defined |
+| MiniMax | Cloud (Anthropic endpoint) | Not required | native | provider-defined |
+| Custom OpenAI-compatible | Depends on endpoint | Usually required for Claude Code integration | native/xml by model capability | endpoint-defined |
+
+## Request Validation Rules (`/v1/messages`)
+
+The adapter validates both structure and semantics at request entry. Validation failures return HTTP `400`.
+
+### Required fields
+
+- `model`: string
+- `max_tokens`: positive number
+- `messages`: non-empty array
+
+### Optional field constraints
+
+- `temperature`: `0..1`
+- `top_p`: `0..1`
+- `top_k`: positive integer
+- `stream`: boolean
+- `stop_sequences`: array of strings
+- `metadata`: object
+- `system`: string, or array of text blocks `[{ "type": "text", "text": "..." }]`
+
+### `tools` and `tool_choice`
+
+- `tools` must be an array; each tool requires:
+  - `name`: non-empty string
+  - `description`: string
+  - `input_schema`: object
+  - if `input_schema.type` exists, it must be `"object"`
+- `tool_choice` is only valid when `tools` is provided:
+  - string: `"auto"` / `"any"`
+  - object: `{ "type": "auto"|"any"|"tool", "name"?: "..." }`
+  - when `type="tool"`, `name` is required
+
+### `messages[].content[]` semantic constraints
+
+- Supported block types: `text`, `tool_use`, `tool_result`, `thinking`, `redacted_thinking`
+- `user` messages cannot include `tool_use`
+- `assistant` messages cannot include `tool_result`
+- `text` blocks require string `text`
+- `tool_use` requires `id`, `name`, and object `input`
+- `tool_result` requires `tool_use_id` and `content` (`string|array`)
+
+### Common failure example
+
+```json
+{
+  "model": "claude-sonnet-4-20250514",
+  "max_tokens": 256,
+  "messages": [{"role": "user", "content": "hello"}],
+  "tool_choice": "auto"
+}
+```
+
+This fails because `tool_choice` is set but `tools` is missing.
 
 ## Troubleshooting
 

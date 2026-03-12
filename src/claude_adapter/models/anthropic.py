@@ -34,6 +34,26 @@ class AnthropicToolResultBlock(BaseModel):
     is_error: Optional[bool] = None
 
 
+class AnthropicThinkingBlock(BaseModel):
+    """Thinking content block (extended thinking) 思考内容块（扩展思考）"""
+
+    type: Literal["thinking"] = "thinking"
+    thinking: str = ""
+    signature: Optional[str] = None
+    budget_tokens: Optional[int] = None
+
+    model_config = {"extra": "allow"}
+
+
+class AnthropicRedactedThinkingBlock(BaseModel):
+    """Redacted thinking content block 已编辑的思考内容块"""
+
+    type: Literal["redacted_thinking"] = "redacted_thinking"
+    data: Optional[str] = None
+
+    model_config = {"extra": "allow"}
+
+
 def _get_content_block_discriminator(v: Any) -> str:
     """Get discriminator value for content block union
     获取内容块联合类型的鉴别值
@@ -56,6 +76,8 @@ AnthropicContentBlock = Annotated[
         Annotated[AnthropicTextBlock, Tag("text")],
         Annotated[AnthropicToolUseBlock, Tag("tool_use")],
         Annotated[AnthropicToolResultBlock, Tag("tool_result")],
+        Annotated[AnthropicThinkingBlock, Tag("thinking")],
+        Annotated[AnthropicRedactedThinkingBlock, Tag("redacted_thinking")],
     ],
     Discriminator(_get_content_block_discriminator),
 ]
@@ -104,6 +126,7 @@ class AnthropicMessageRequest(BaseModel):
     system: Optional[Union[str, list[AnthropicSystemContent]]] = None
     temperature: Optional[float] = Field(None, ge=0, le=1)
     top_p: Optional[float] = Field(None, ge=0, le=1)
+    top_k: Optional[int] = None
     stop_sequences: Optional[list[str]] = None
     stream: Optional[bool] = False
     tools: Optional[list[AnthropicToolDefinition]] = None

@@ -6,7 +6,10 @@ Handle /v1/messages API requests
 
 import json
 import secrets
-from typing import Any
+import asyncio
+import os
+import time
+from typing import Any, Optional
 from fastapi import Request
 from fastapi.responses import JSONResponse, StreamingResponse
 import httpx
@@ -17,11 +20,17 @@ from ..models.config import AdapterConfig
 from ..converters.request import convert_request_to_openai
 from ..converters.response import create_error_response
 from ..converters.streaming import convert_stream_to_anthropic
+from ..converters.xml_streaming import convert_xml_stream_to_anthropic
 from ..utils.logger import logger
 from ..utils.validation import validate_anthropic_request, format_validation_errors
 from ..utils.token_usage import record_usage
 from ..utils.error_log import record_error
 from openai import APIError as OpenAIAPIError
+
+_cached_client: Optional[AsyncOpenAI] = None
+_cached_client_key: Optional[tuple] = None
+_NON_RECOVERABLE_STREAM_START_STATUS = {401, 402, 403, 404, 429}
+_CONNECT_WARNING_SECONDS = float(os.getenv("CONNECT_WARNING_SECONDS", "15")) ## 连接警告秒数
 
 
 def _generate_request_id() -> str:
@@ -32,6 +41,103 @@ def _generate_request_id() -> str:
         请求 ID（格式：msg_XXXXXXXXXXXXXXXXXXXX）
     """
     return f"msg_{secrets.token_urlsafe(18)[:24]}"
+
+
+def _extract_status_code(error: Exception) -> Optional[int]:
+    """Extract HTTP-like status code from SDK/HTTP exceptions."""
+    status = getattr(error, "status_code", None)
+    if status is None:
+        status = getattr(error, "status", None)
+    try:
+        return int(status) if status is not None else None
+    except Exception:
+        return None
+
+
+def _elapsed_ms(started_at: float) -> int:
+    return int((time.perf_counter() - started_at) * 1000)
+
+
+async def _call_with_connect_warning(
+    awaitable: Any,
+    req_logger: Any,
+    target_model: str,
+    mode: str,
+    warning_seconds: float = _CONNECT_WARNING_SECONDS,
+) -> Any:
+    """Await upstream call and emit warn log if connection/setup is too slow."""
+    warning_task: Optional[asyncio.Task] = None
+
+    if warning_seconds > 0:
+        async def _warn_later() -> None:
+            await asyncio.sleep(warning_seconds)
+            req_logger.warn(
+                "Upstream connection is taking longer than expected",
+                {
+                    "mode": mode,
+                    "model": target_model,
+                    "threshold_s": warning_seconds,
+                },
+            )
+
+        warning_task = asyncio.create_task(_warn_later())
+
+    try:
+        return await awaitable
+    finally:
+        if warning_task is not None and not warning_task.done():
+            warning_task.cancel()
+
+
+def _get_openai_client(config: AdapterConfig) -> AsyncOpenAI:
+    """Get or create a cached AsyncOpenAI client.
+    Reuses the same client as long as base_url and api_key don't change.
+    """
+    global _cached_client, _cached_client_key
+    key = (config.base_url, config.api_key)
+    if _cached_client is not None and _cached_client_key == key:
+        return _cached_client
+
+    transport = httpx.AsyncHTTPTransport(
+        retries=1,
+    )
+    http_client = httpx.AsyncClient(
+        transport=transport,
+        timeout=httpx.Timeout(
+            connect=10.0,
+            read=600.0,
+            write=30.0,
+            pool=10.0,
+        ),
+        limits=httpx.Limits(
+            max_keepalive_connections=5,
+            max_connections=10,
+            keepalive_expiry=30.0,
+        ),
+    )
+
+    _cached_client = AsyncOpenAI(
+        base_url=config.base_url,
+        api_key=config.api_key,
+        max_retries=2,
+        http_client=http_client,
+    )
+    _cached_client_key = key
+    return _cached_client
+
+
+async def close_openai_client() -> None:
+    """Close cached AsyncOpenAI/httpx client if exists."""
+    global _cached_client, _cached_client_key
+    client = _cached_client
+    _cached_client = None
+    _cached_client_key = None
+    if client is None:
+        return
+    try:
+        await client.close()
+    except Exception:
+        pass
 
 
 def _detect_tool_format(anthropic_request: AnthropicMessageRequest, config: AdapterConfig) -> str:
@@ -166,6 +272,7 @@ async def handle_messages_request(
     # Generate request ID 生成请求 ID
     request_id = _generate_request_id()
     req_logger = logger.with_request_id(request_id)
+    started_at = time.perf_counter()
 
     try:
         # Parse request body 解析请求体
@@ -222,12 +329,8 @@ async def handle_messages_request(
             config,
         )
 
-        # Initialize OpenAI client 初始化 OpenAI 客户端
-        client = AsyncOpenAI(
-            base_url=config.base_url,
-            api_key=config.api_key,
-            http_client=httpx.AsyncClient(timeout=300.0),
-        )
+        # Get OpenAI client (cached per base_url+api_key)
+        client = _get_openai_client(config)
 
         # Handle streaming vs non-streaming 处理流式与非流式
         is_streaming = anthropic_request.stream or False
@@ -235,6 +338,9 @@ async def handle_messages_request(
         # Compact log: one line per request 紧凑日志：每个请求一行
         mode = "stream" if is_streaming else "sync"
         req_logger.info(f"→ {target_model}", {"mode": mode, "tools": tool_format})
+
+        if tool_format == "xml" and anthropic_request.tools:
+            req_logger.info(f"Using XML tool calling mode ({len(anthropic_request.tools)} tools)")
 
         if is_streaming:
             # Streaming response 流式响应
@@ -245,9 +351,14 @@ async def handle_messages_request(
                 stream_request = {k: v for k, v in openai_request.items() if k != "stream"}
 
                 # Create OpenAI stream 创建 OpenAI 流
-                openai_stream = await client.chat.completions.create(
-                    **stream_request,
-                    stream=True,
+                openai_stream = await _call_with_connect_warning(
+                    client.chat.completions.create(
+                        **stream_request,
+                        stream=True,
+                    ),
+                    req_logger,
+                    target_model,
+                    "stream",
                 )
 
                 # Convert to async iterator of SSE lines 转换为 SSE 行的异步迭代器
@@ -257,44 +368,52 @@ async def handle_messages_request(
                             yield f"data: {chunk.model_dump_json()}\n\n"
                         yield "data: [DONE]\n\n"
                     except OpenAIAPIError as e:
-                        # Handle API errors during streaming (e.g., context length exceeded)
-                        # 处理流式传输中的 API 错误（例如：超出上下文长度）
                         record_error(e, request_id, config.base_url, requested_model, True)
-                        error_data = {
-                            "error": {
-                                "type": "invalid_request_error",
-                                "message": str(e),
+                        status = getattr(e, "status_code", None) or getattr(e, "status", 0)
+                        if status in (401, 402, 403, 429):
+                            error_data = {
+                                "error": {
+                                    "type": "invalid_request_error",
+                                    "message": str(e),
+                                }
                             }
-                        }
-                        yield f"data: {json.dumps(error_data)}\n\n"
+                            yield f"data: {json.dumps(error_data)}\n\n"
                         yield "data: [DONE]\n\n"
                     except Exception as e:
-                        # Handle connection/protocol errors (e.g. peer closed connection)
-                        # 与 claude-adapter (TS) 一致：捕获所有流式迭代中的异常并返回错误 SSE
                         record_error(e, request_id, config.base_url, requested_model, True)
-                        req_logger.warn("Stream iteration error", {"error": str(e), "mode": "stream"})
-                        error_data = {
-                            "error": {
-                                "type": "api_error",
-                                "message": str(e),
-                            }
-                        }
-                        yield f"data: {json.dumps(error_data)}\n\n"
+                        req_logger.warn("Stream interrupted, ending gracefully", {
+                            "error": str(e)[:200], "mode": "stream",
+                        })
                         yield "data: [DONE]\n\n"
 
-                # Convert stream to Anthropic format 将流转换为 Anthropic 格式
-                anthropic_stream = convert_stream_to_anthropic(
-                    openai_line_iterator(),
-                    request_id,
-                    requested_model,
-                )
+                # Choose stream converter based on tool format
+                # 根据工具格式选择流转换器
+                if tool_format == "xml":
+                    anthropic_stream = convert_xml_stream_to_anthropic(
+                        openai_line_iterator(),
+                        request_id,
+                        requested_model,
+                        config.base_url,
+                    )
+                else:
+                    anthropic_stream = convert_stream_to_anthropic(
+                        openai_line_iterator(),
+                        request_id,
+                        requested_model,
+                        config.base_url,
+                    )
 
+                req_logger.info(
+                    f"↩ stream ready {target_model}",
+                    {"setup_ms": _elapsed_ms(started_at), "tools": tool_format},
+                )
                 return StreamingResponse(
                     anthropic_stream,
                     media_type="text/event-stream",
                     headers={
                         "Cache-Control": "no-cache",
                         "Connection": "keep-alive",
+                        "X-Accel-Buffering": "no",
                         "X-Request-Id": request_id,
                     },
                 )
@@ -302,11 +421,54 @@ async def handle_messages_request(
                 req_logger.error(f"Streaming error: {str(e)}", error=e)
                 record_error(e, request_id, config.base_url, requested_model, True)
 
-                # Extract status code if available 如果可用则提取状态码
-                status_code = getattr(e, "status_code", 500)
-                return JSONResponse(
-                    status_code=status_code,
-                    content=create_error_response(e, status_code),
+                # Stream-start errors are split into:
+                # - non-recoverable (auth/permission/rate/invalid endpoint): return HTTP error
+                # - recoverable (network/upstream transient): gracefully end stream
+                status_code = _extract_status_code(e)
+                if status_code in _NON_RECOVERABLE_STREAM_START_STATUS:
+                    return JSONResponse(
+                        status_code=status_code or 500,
+                        content=create_error_response(e, status_code or 500),
+                    )
+
+                async def failed_stream_line_iterator():
+                    error_data = {
+                        "error": {
+                            "type": "api_error",
+                            "message": str(e),
+                        }
+                    }
+                    yield f"data: {json.dumps(error_data)}\n\n"
+                    yield "data: [DONE]\n\n"
+
+                if tool_format == "xml":
+                    anthropic_stream = convert_xml_stream_to_anthropic(
+                        failed_stream_line_iterator(),
+                        request_id,
+                        requested_model,
+                        config.base_url,
+                    )
+                else:
+                    anthropic_stream = convert_stream_to_anthropic(
+                        failed_stream_line_iterator(),
+                        request_id,
+                        requested_model,
+                        config.base_url,
+                    )
+
+                req_logger.warn(
+                    "Recovered stream-start error with graceful SSE end",
+                    {"elapsed_ms": _elapsed_ms(started_at), "tools": tool_format},
+                )
+                return StreamingResponse(
+                    anthropic_stream,
+                    media_type="text/event-stream",
+                    headers={
+                        "Cache-Control": "no-cache",
+                        "Connection": "keep-alive",
+                        "X-Accel-Buffering": "no",
+                        "X-Request-Id": request_id,
+                    },
                 )
 
         else:
@@ -321,7 +483,12 @@ async def handle_messages_request(
                 }
 
                 # Call OpenAI API 调用 OpenAI API
-                openai_response = await client.chat.completions.create(**non_stream_request)
+                openai_response = await _call_with_connect_warning(
+                    client.chat.completions.create(**non_stream_request),
+                    req_logger,
+                    target_model,
+                    "sync",
+                )
 
                 # Convert response (using SDK object directly)
                 # 转换响应（直接使用 SDK 对象）
@@ -344,7 +511,11 @@ async def handle_messages_request(
 
                 req_logger.info(
                     f"← {target_model}",
-                    {"in": usage["input_tokens"], "out": usage["output_tokens"]},
+                    {
+                        "in": usage["input_tokens"],
+                        "out": usage["output_tokens"],
+                        "elapsed_ms": _elapsed_ms(started_at),
+                    },
                 )
 
                 return JSONResponse(
@@ -364,7 +535,11 @@ async def handle_messages_request(
                 )
 
     except Exception as e:
-        req_logger.error(f"Unexpected error: {str(e)}", error=e)
+        req_logger.error(
+            f"Unexpected error: {str(e)}",
+            error=e,
+            meta={"elapsed_ms": _elapsed_ms(started_at)},
+        )
         return JSONResponse(
             status_code=500,
             content=create_error_response(e, 500),

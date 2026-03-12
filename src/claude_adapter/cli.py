@@ -46,6 +46,7 @@ from .utils.config import (
     save_paid_provider_to_cache,
 )
 from .utils.update import get_cached_update_info
+from .utils.context_size import parse_context_size, format_context_size
 from .utils import ui
 from .server import run_server
 
@@ -364,23 +365,23 @@ def _configure_free_provider(
     is_lmstudio = provider_name == "lmstudio"
     default_ctx = ""
     if existing and existing.max_context_window is not None:
-        default_ctx = str(existing.max_context_window)
+        default_ctx = format_context_size(existing.max_context_window)
     elif preset.max_context_window:
-        default_ctx = str(preset.max_context_window) if not is_lmstudio else "4096"
+        default_ctx = format_context_size(preset.max_context_window) if not is_lmstudio else "4096"
     if is_lmstudio and not default_ctx:
         default_ctx = "4096"
 
     ctx_str = questionary.text(
-        "Max context window 最大上下文长度 (LM Studio 必填 required):"
+        "Max context window 最大上下文长度 (支持 128k/200k/256k 或数字, LM Studio 必填):"
         if is_lmstudio
-        else "Max context window 最大上下文长度 (optional 可选, Enter=default):",
+        else "Max context window 最大上下文长度 (支持 128k/200k/256k 或数字, 可选 Enter=default):",
         default=default_ctx,
     ).ask()
 
     max_context_window: Optional[int] = None
     if ctx_str and ctx_str.strip():
         try:
-            n = int(ctx_str.strip())
+            n = parse_context_size(ctx_str)
             max_context_window = n if n > 0 else (4096 if is_lmstudio else preset.max_context_window)
         except ValueError:
             max_context_window = 4096 if is_lmstudio else preset.max_context_window
@@ -426,7 +427,7 @@ def _display_config(config: AdapterConfig, preset: ProviderPreset, port: Optiona
         ("Tool Format", config.tool_format),
     ]
     if config.max_context_window is not None:
-        rows.append(("Max context window", str(config.max_context_window)))
+        rows.append(("Max context window", format_context_size(config.max_context_window)))
     ui.table(rows)
 
 

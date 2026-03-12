@@ -182,7 +182,7 @@ def banner() -> None:
             border_style=BORDER,
             title=f"[bold {BRAND}]  ◆  claude-adapter-py  ◆  [/]",
             title_align="center",
-            subtitle=f"[{DIM}]v1.0 · Python 3.12+[/]",
+            subtitle=f"[{DIM}]v1.0 · Python 3.10+[/]",
             subtitle_align="center",
             padding=(1, 3),
             width=62,

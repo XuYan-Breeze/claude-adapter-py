@@ -8,6 +8,9 @@ from typing import Literal
 
 from .models.config import ProviderPreset, ProviderName, ModelConfig
 
+# Context window constants (readable: 128k = 131072)
+K = 1024
+
 # Provider category type 提供商分类类型
 ProviderCategory = Literal["free", "paid", "custom"]
 
@@ -123,6 +126,7 @@ PROVIDER_PRESETS: dict[ProviderName, ProviderPreset] = {
         ),
         default_tool_format="native",
         description="NVIDIA NIM API (https://build.nvidia.com/)",
+        max_context_window=128 * K,
     ),
     "ollama": ProviderPreset(
         name="ollama",
@@ -137,7 +141,7 @@ PROVIDER_PRESETS: dict[ProviderName, ProviderPreset] = {
         ),
         default_tool_format="native",
         description="Ollama localhost:11434 (https://ollama.com/)",
-        max_context_window=8192,
+        max_context_window=8 * K,
     ),
     "lmstudio": ProviderPreset(
         name="lmstudio",
@@ -152,7 +156,7 @@ PROVIDER_PRESETS: dict[ProviderName, ProviderPreset] = {
         ),
         default_tool_format="native",
         description="LM Studio localhost:1234 (https://lmstudio.ai/)",
-        max_context_window=131072,
+        max_context_window=128 * K,
     ),
     "kimi": ProviderPreset(
         name="kimi",
