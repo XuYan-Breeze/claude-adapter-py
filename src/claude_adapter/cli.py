@@ -601,7 +601,10 @@ def main(
         if provider_name == BACK:
             continue
         if not provider_name:
-            ui.warning("No provider selected")
+            active = get_active_provider()
+            if active:
+                active_preset = get_provider_preset(active)
+                ui.info(f"Current provider: {active_preset.label}")
             raise typer.Exit(0)
 
         provider_name_str = provider_name  # type: ignore
@@ -925,7 +928,12 @@ def cli_main() -> None:
         app()
     except KeyboardInterrupt:
         print()
-        ui.info("Cancelled")
+        active = get_active_provider()
+        if active:
+            active_preset = get_provider_preset(active)
+            ui.info(f"Current provider: {active_preset.label}")
+        else:
+            ui.info("Cancelled")
         raise typer.Exit(0)
     except Exception as e:
         ui.error("Unexpected error", e)
